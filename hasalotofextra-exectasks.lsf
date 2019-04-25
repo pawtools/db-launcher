@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# See the file "jobscript.lsf" for the MongoDB
+# relevant items alone
+
+#PBS -e admd.err
+#PBS -o admd.out
+
+#####----------------------------------------------#####
+#---------------------------------------------#
+#  Job file used for instantiating the        #
+#  AdaptiveMDWorkers who will carry out       #
+#  our tasks.                                 #
+#                                             #
+#       1        2         3       4       5       6       7
+# roundnumber projname wkldtype ntraj mdsteps tjsteps aftrntjs
+#         8            9       10        11       12
+# anlyztjlength samplefunc minutes execflag jobstatefile
+#                                             #
+#---------------------------------------------#
+#####----------------------------------------------#####
+
+echo "GOT THESE ARGS: $ARGS"
+# Space-delimited  args for Application
+AARGS=(`echo $ARGS | tr '*' ' '`)
+echo "Now THESE AARGS: ${AARGS[@]}"
+echo $AARGS
+
+ROUND_N=${AARGS[0]}
+PROJNAME=${AARGS[1]}
+NTRAJ=${AARGS[3]}
+ADMD_DB=${AARGS[10]}
+JOBSTATEFILE=${AARGS[11]}
+
+## ##ROUND_N=$(echo $1 | awk -F"$DLM" '{print $1}')
+## ##PROJNAME=$(echo $1 | awk -F"$DLM" '{print $2}')
+## ###WKLOADTYPE=$(echo $1 | awk -F"*" '{print $3}')
+## ##NTRAJ=$(echo $1 | awk -F"$DLM" '{print $4}')
+## ###MDSTEPS=$(echo $1 | awk -F"*" '{print $5}')
+## ###TJSTEPS=$(echo $1 | awk -F"*" '{print $6}')
+## ###AFTERNTRAJS=$(echo $1 | awk -F"*" '{print $7}')
+## ###MDLTJLENGTH=$(echo $1 | awk -F"*" '{print $8}')
+## ###SAMPLEFUNC=$(echo $1 | awk -F"*" '{print $9}')
+## ###MINUTES=$(echo $1 | awk -F"*" '{print $10}')
+## ##ADMD_DB=$(echo $1 | awk -F"$DLM" '{print $11}')
+## ##JOBSTATEFILE=$(echo $1 | awk -F"$DLM" '{print $12}')
+
+if [ ! -z "$JOBSTATEFILE" ]
+then
+  echo "RUN" > $JOBSTATEFILE
+fi
+
+source $SHPROFILE
+
+echo "LSB_MCPU_HOSTS"
+echo $LSB_MCPU_HOSTS
+echo "LSB_HOSTS"
+echo $LSB_HOSTS
+echo "\$LSB_HOSTS | tr ' ' '\n' | sort -u | wc -l"
+echo $LSB_HOSTS | tr ' ' '\n' | sort -u | wc -l
+NNODES=$(echo "`echo $LSB_MCPU_HOSTS | tr ' ' '\n' | sort -u | wc -l` - 3" | bc)
+export OMP_NUM_THREADS="7"
+export OPENMM_CPU_THREADS=$OMP_NUM_THREADS
+export OPENMM_CUDA_COMPILER=`which nvcc`
+
+echo "Job in directory:"
+echo `pwd`
+ls -grth
+echo "ADMD_ACTIVATE: $ADMD_ACTIVATE"
+echo "ADMD_HOSTNAME: $ADMD_HOSTNAME"
+echo "PYTHON: `which python`"
+echo "pip: `which pip`"
+echo "packages:"
+echo `conda list`
+echo "OPENMM_CUDA_COMPILER: $OPENMM_CUDA_COMPILER"
+echo "Using Project Name:  $PROJNAME"
+echo "Database Location: $ADMD_DB"
+echo "python: `which python`"
+echo "gcc: `which gcc`"
+
+echo "NNODES: $NNODES"
+NWORKERS=$((($NNODES-1)*6))
+#NNODES=$NTRAJ
+
+#####----------------------------------------------#####
+###--           MongoDB Host Setup                 --###
+#####----------------------------------------------#####
+echo "Database top:"
+ls -grth $ADMD_DB
+REMOTEPORT=27017
+mongolaunch="jsrun --exit_on_error 1 --nrs 1 --tasks_per_rs 1 --cpu_per_rs 42 --bind packed:42 --launch_distribution plane:1   $ADMD_RUNTIME/startdb.sh $ADMD_DB $REMOTEPORT $ADMD_NETDEVICE"
+echo $mongolaunch
+eval $mongolaunch 2> admd.startdb.err 1> admd.startdb.out & MONGO_APID=$!
+# Must wait for mongo node to write hostname and start up
+sleep 15
+REMOTEHOST=`cat $ADMD_DB/db.hostname`
+echo   "MongoDB Hostname for project '$PROJNAME': $REMOTEHOST"
+export ADMD_DBURL="mongodb://$REMOTEHOST:$REMOTEPORT/"
+
+#####----------------------------------------------#####
+###--     AdaptiveMD Application & Workers         --###
+###--       - application on job host              --###
+###--       - workers on compute nodes             --###
+#####----------------------------------------------#####
+admdappcommand="$ADMD_RUNTIME/application.sh ${AARGS[@]:0:10}"
+echo $admdappcommand
+eval $admdappcommand 1> admd.adaptivemd.launch.out 2> admd.adaptivemd.launch.err & EVENT_PID=$!
+sleep 15
+#------------------------------------------------------#
+echo "a worklow starts `date +%Y/%m/%d-%H:%M:%S.%5N`"
+admdworkerlaunch="jsrun --exit_on_error 1 --nrs $NWORKERS --tasks_per_rs 1 --gpu_per_rs 1 --cpu_per_rs 7 --rs_per_host 6 --bind packed:7 --launch_distribution plane:1 --smpiargs off   $ADMD_RUNTIME/startworker.sh $PROJNAME $ADMD_DBURL $NWORKERS"
+echo $admdworkerlaunch
+eval $admdworkerlaunch 2> admd.worker.launch.err 1> admd.worker.launch.out & WORKERS_APID=$!
+#------------------------------------------------------#
+
+#####----------------------------------------------#####
+###--           Finishing Up Now                   --###
+#####----------------------------------------------#####
+echo "Done launching workers, now waiting"
+echo "Waiting for event scripts to terminate"
+wait "$EVENT_PID"
+echo "a worklow stops `date +%Y/%m/%d-%H:%M:%S.%5N`"
+#echo "Waiting for workers to shut down"
+echo "Not waiting for workers to shut down"
+kill "$WORKERS_APID"
+wait "$WORKERS_APID"
+sleep 2
+echo "Going to shut down the database, event is finished"
+kill "$MONGO_APID"
+wait "$MONGO_APID"
+sleep 10
+rm $ADMD_DB/db.hostname
+deactivate
+wait
+if [ ! -z "$JOBSTATEFILE" ]
+then
+  echo "DONE" > $JOBSTATEFILE
+fi
+
+sleep 10
+echo "I'm depressed, killing myself!"
+echo "bkill $LSB_JOBID"
+bkill $LSB_JOBID

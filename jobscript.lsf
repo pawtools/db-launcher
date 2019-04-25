@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# This structure requires an arg given
+# via bsub for a 'parent' database folder 
+#
+# --> the actual database will be a subfolder
+#     alongside the config file and such
+
+#PBS -e launchdb.err
+#PBS -o launchdb.out
+
+DB_PARENT=${ARGS[0]}
+NETDEVICE="ib0"
+
+# TODO NNODES will be useful (sooner) later when we
+#      want something to connect to the DB
+# "LSB_HOSTS" is (erroneously?) empty with all jobs but
+# the tiniest ones on summit, have to use "LSB_MCPU_HOSTS"
+#echo "LSB_MCPU_HOSTS"
+#echo $LSB_MCPU_HOSTS
+#echo "LSB_HOSTS"
+#echo $LSB_HOSTS
+#echo "\$LSB_HOSTS | tr ' ' '\n' | sort -u | wc -l"
+#echo $LSB_HOSTS | tr ' ' '\n' | sort -u | wc -l
+#NNODES=$(echo "`echo $LSB_MCPU_HOSTS | tr ' ' '\n' | sort -u | wc -l` - 3" | bc)
+# minus 1 since 1 node for database
+#NWORKERS=$((($NNODES-1)*6))
+#export OMP_NUM_THREADS="7"
+#echo "NNODES: $NNODES"
+echo "Job in directory:"
+echo `pwd`
+echo "Database Location: $DB_PARENT"
+
+#####----------------------------------------------#####
+###--           MongoDB Host Setup                 --###
+#####----------------------------------------------#####
+echo "Database top:"
+ls -grth $DB_PARENT
+REMOTEPORT=27017
+mongolaunch="jsrun --exit_on_error 1 --nrs 1 --tasks_per_rs 1 --cpu_per_rs 42 --bind packed:42 --launch_distribution plane:1   $ADMD_RUNTIME/startdb.sh $DB_PARENT $REMOTEPORT $NETDEVICE"
+echo $mongolaunch
+eval $mongolaunch 2> admd.startdb.err 1> admd.startdb.out & MONGO_APID=$!
+# Must wait for mongo node to write hostname and start up
+sleep 15
+REMOTEHOST=`cat $DB_PARENT/db.hostname`
+echo   "MongoDB Hostname for project '$PROJNAME': $REMOTEHOST"
+export DBURL="mongodb://$REMOTEHOST:$REMOTEPORT/"
+
+# Activity should happen here
+# In real usage, I wait on jsrun PIDs of the workers
+# --> when the jsrun returns, then I kill database
+sleep 100
+
+#####----------------------------------------------#####
+###--           Finishing Up Now                   --###
+#####----------------------------------------------#####
+echo "Going to shut down the database, event is finished"
+kill "$MONGO_APID"
+wait "$MONGO_APID"
+sleep 10
+rm $DB_PARENT/db.hostname
+
+# Sometimes job doesn't die nicely...
+sleep 10
+echo "I'm depressed, killing myself!"
+echo "bkill $LSB_JOBID"
+bkill $LSB_JOBID
