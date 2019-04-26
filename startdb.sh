@@ -9,7 +9,7 @@ then
   NETDEVICE="eth0"
 fi
 
-# Parse the ip address of this node on Gemini
+# Parse the ip address for given NETDEVICE
 DBHOST=`ip addr show $NETDEVICE | grep -Eo '(addr:)?([0-9]*\.){3}[0-9]*' | head -n1`
 
 echo "$DBHOST" > $DBPATH/db.hostname
