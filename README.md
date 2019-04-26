@@ -1,5 +1,11 @@
 # db-launcher
 
+Usage:
+
+```bash
+./runme.sh
+```
+
 Currently this works through the LSF job manager.
 
 Job gets launched, database should come up, nothing happens during a 100 second
