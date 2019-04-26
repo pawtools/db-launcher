@@ -1,13 +1,16 @@
 #!/bin/bash
+#BSUB -e mongodb.err
+#BSUB -o mongodb.out
+
 
 # This structure requires an arg given
 # via bsub for a 'parent' database folder 
+# and an RC file to create shell env
 #
 # --> the actual database will be a subfolder
 #     alongside the config file and such
 
-#PBS -e launchdb.err
-#PBS -o launchdb.out
+source $SHPROFILE
 
 DB_PARENT=${ARGS[0]}
 NETDEVICE="ib0"
@@ -37,14 +40,14 @@ echo "Database Location: $DB_PARENT"
 echo "Database top:"
 ls -grth $DB_PARENT
 REMOTEPORT=27017
-mongolaunch="jsrun --exit_on_error 1 --nrs 1 --tasks_per_rs 1 --cpu_per_rs 42 --bind packed:42 --launch_distribution plane:1   $ADMD_RUNTIME/startdb.sh $DB_PARENT $REMOTEPORT $NETDEVICE"
+mongolaunch="jsrun --exit_on_error 1 --nrs 1 --tasks_per_rs 1 --cpu_per_rs 42 --bind packed:42 --launch_distribution plane:1 ./startdb.sh $DB_PARENT $REMOTEPORT $NETDEVICE"
 echo $mongolaunch
-eval $mongolaunch 2> admd.startdb.err 1> admd.startdb.out & MONGO_APID=$!
+eval $mongolaunch 2> mongodb.start.err 1> mongodb.start.out & MONGO_APID=$!
 # Must wait for mongo node to write hostname and start up
 sleep 15
 REMOTEHOST=`cat $DB_PARENT/db.hostname`
-echo   "MongoDB Hostname for project '$PROJNAME': $REMOTEHOST"
 export DBURL="mongodb://$REMOTEHOST:$REMOTEPORT/"
+echo   "MongoDB URL: $DBURL"
 
 # Activity should happen here
 # In real usage, I wait on jsrun PIDs of the workers

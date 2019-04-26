@@ -17,4 +17,4 @@ echo "$DBHOST" > $DBPATH/db.hostname
 echo "Hopefully ulimit is 32k..."
 ulimit -n
 
-$ADMD_RUNTIME/launch_amongod.sh $DBPATH $DBPORT --launch 2> admd.mongodb.err 1> admd.mongodb.out
+./launch_amongod.sh $DBPATH $DBPORT --launch 2> mongodb.launcher.err 1> mongodb.launcher.out
